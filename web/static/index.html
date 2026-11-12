@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PathWatch AI — Accessibility Audit Dashboard</title>
+
+  <!-- Leaflet.js (local-network CDN; runs fully offline after first load) -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    crossorigin=""
+  />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+
+  <style>
+    /* ------------------------------------------------------------------ reset */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      color: #1f2328;
+      background: #f7f8fa;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* ------------------------------------------------------------------ header */
+    header {
+      background: #fff;
+      border-bottom: 1px solid #e5e7eb;
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    header h1 { font-size: 16px; font-weight: 700; color: #1f2328; }
+    header span { font-size: 12px; color: #57606a; }
+
+    /* ------------------------------------------------------------------ layout */
+    .layout {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ------------------------------------------------------------------ sidebar */
+    #sidebar {
+      width: 340px;
+      min-width: 280px;
+      background: #fff;
+      border-right: 1px solid #e5e7eb;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    /* Upload panel */
+    #upload-panel {
+      padding: 14px 16px;
+      border-bottom: 1px solid #e5e7eb;
+      flex-shrink: 0;
+    }
+    #upload-panel h2 { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #1f2328; }
+    #upload-form { display: flex; flex-direction: column; gap: 8px; }
+    #photo-input {
+      font-size: 13px;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 6px 8px;
+      background: #f7f8fa;
+      cursor: pointer;
+      width: 100%;
+    }
+    #upload-btn {
+      background: #3b82d4;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    #upload-btn:hover { background: #2563b0; }
+    #upload-btn:disabled { background: #9db9e8; cursor: not-allowed; }
+    #upload-status {
+      font-size: 12px;
+      color: #57606a;
+      min-height: 16px;
+    }
+    #upload-status.error { color: #b91c1c; }
+    #upload-status.ok { color: #16a34a; }
+
+    /* Export buttons */
+    #export-panel {
+      padding: 10px 16px;
+      border-bottom: 1px solid #e5e7eb;
+      flex-shrink: 0;
+      display: flex;
+      gap: 8px;
+    }
+    .export-btn {
+      flex: 1;
+      background: #f7f8fa;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      color: #1f2328;
+      transition: background 0.15s;
+    }
+    .export-btn:hover { background: #e5e7eb; }
+
+    /* Hazard card list */
+    #hazard-list {
+      overflow-y: auto;
+      flex: 1;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    #hazard-list-empty {
+      color: #57606a;
+      font-size: 13px;
+      text-align: center;
+      padding: 24px 12px;
+    }
+
+    /* Individual hazard card */
+    .hazard-card {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 12px;
+      background: #fff;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .hazard-card:hover { border-color: #3b82d4; }
+    .hazard-card.active { border-color: #3b82d4; box-shadow: 0 0 0 2px #bfdbfe; }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .severity-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .sev-HIGH    { background: #dc2626; }
+    .sev-MEDIUM  { background: #f97316; }
+    .sev-LOW     { background: #ca8a04; }
+    .sev-NONE, .sev-COMPLIANT { background: #16a34a; }
+
+    .card-title {
+      font-weight: 600;
+      font-size: 13px;
+      color: #1f2328;
+      flex: 1;
+    }
+    .card-severity {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: #fff;
+    }
+    .badge-HIGH    { background: #dc2626; }
+    .badge-MEDIUM  { background: #f97316; }
+    .badge-LOW     { background: #ca8a04; }
+    .badge-NONE, .badge-COMPLIANT { background: #16a34a; }
+
+    .card-desc {
+      font-size: 12px;
+      color: #57606a;
+      margin-bottom: 6px;
+    }
+    .card-citations {
+      font-size: 11px;
+      color: #3b82d4;
+      margin-bottom: 8px;
+    }
+    .card-actions { display: flex; gap: 6px; }
+    .card-btn {
+      flex: 1;
+      font-size: 11px;
+      padding: 5px 8px;
+      border: 1px solid #e5e7eb;
+      border-radius: 5px;
+      background: #f7f8fa;
+      cursor: pointer;
+      color: #1f2328;
+      font-weight: 500;
+      transition: background 0.15s;
+    }
+    .card-btn:hover { background: #e5e7eb; }
+
+    /* ------------------------------------------------------------------ map */
+    #map {
+      flex: 1;
+      z-index: 0;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>PathWatch AI</h1>
+  <span>Offline-first ADA/PROWAG Sidewalk Accessibility Auditor</span>
+</header>
+
+<div class="layout">
+
+  <!-- ============================================================ SIDEBAR -->
+  <aside id="sidebar">
+
+    <!-- Upload form -->
+    <div id="upload-panel">
+      <h2>Audit a Photo</h2>
+      <form id="upload-form">
+        <input id="photo-input" type="file" accept="image/jpeg,image/png,image/webp" required />
+        <button id="upload-btn" type="submit">Analyse Image</button>
+        <div id="upload-status"></div>
+      </form>
+    </div>
+
+    <!-- Export buttons -->
+    <div id="export-panel">
+      <button class="export-btn" id="btn-export-geojson">⬇ GeoJSON</button>
+      <button class="export-btn" id="btn-export-all-tickets">⬇ All Tickets (zip)</button>
+    </div>
+
+    <!-- Hazard cards -->
+    <div id="hazard-list">
+      <p id="hazard-list-empty">No hazards audited yet.<br>Upload a sidewalk photo above.</p>
+    </div>
+  </aside>
+
+  <!-- ============================================================ MAP -->
+  <div id="map"></div>
+</div>
+
+<script>
+// ============================================================ MAP SETUP
+const DEFAULT_LAT = 43.0766, DEFAULT_LNG = -87.8812;
+
+const map = L.map('map').setView([DEFAULT_LAT, DEFAULT_LNG], 16);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  maxZoom: 20
+}).addTo(map);
+
+// ============================================================ STATE
+let hazards = [];       // HazardAssessment[]
+let markers = [];       // Leaflet marker per hazard
+let activeIdx = null;
+
+// ============================================================ COLOUR UTILS
+function severityColor(sev) {
+  return { HIGH: '#dc2626', MEDIUM: '#f97316', LOW: '#ca8a04', NONE: '#16a34a', COMPLIANT: '#16a34a' }[sev] || '#57606a';
+}
+
+function makeCircleIcon(color) {
+  return L.divIcon({
+    className: '',
+    html: `<div style="width:16px;height:16px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.4)"></div>`,
+    iconSize: [16, 16],
+    iconAnchor: [8, 8],
+    popupAnchor: [0, -10],
+  });
+}
+
+// ============================================================ RENDER HAZARD LIST
+function renderSidebar() {
+  const list = document.getElementById('hazard-list');
+  const empty = document.getElementById('hazard-list-empty');
+  list.innerHTML = '';
+
+  if (hazards.length === 0) {
+    list.appendChild(empty);
+    empty.style.display = '';
+    return;
+  }
+
+  hazards.forEach((h, idx) => {
+    const f = h.finding;
+    const sev = f.severity === 'NONE' ? 'COMPLIANT' : f.severity;
+    const color = severityColor(f.severity);
+
+    const citations = (h.ada_standard || []).map(r => r.rule_code).join(' · ') || '—';
+
+    const card = document.createElement('div');
+    card.className = 'hazard-card' + (idx === activeIdx ? ' active' : '');
+    card.dataset.idx = idx;
+    card.innerHTML = `
+      <div class="card-header">
+        <div class="severity-dot sev-${sev}"></div>
+        <span class="card-title">${f.barrier_type.replace(/_/g, ' ')}</span>
+        <span class="card-severity badge-${sev}">${f.severity}</span>
+      </div>
+      <div class="card-desc">${f.description}</div>
+      <div class="card-citations">📋 ${citations}</div>
+      <div class="card-actions">
+        <button class="card-btn" data-action="fly" data-idx="${idx}">📍 Pan to</button>
+        <button class="card-btn" data-action="ticket" data-idx="${idx}">📄 311 Ticket</button>
+        <button class="card-btn" data-action="geojson" data-idx="${idx}">🗂 GeoJSON</button>
+      </div>
+    `;
+    list.appendChild(card);
+  });
+
+  // Card click — pan & activate
+  list.querySelectorAll('.hazard-card').forEach(card => {
+    card.addEventListener('click', e => {
+      if (e.target.matches('.card-btn')) return;
+      const idx = parseInt(card.dataset.idx);
+      activateHazard(idx);
+    });
+  });
+
+  // Button clicks
+  list.querySelectorAll('.card-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const idx = parseInt(btn.dataset.idx);
+      const action = btn.dataset.action;
+      if (action === 'fly') {
+        activateHazard(idx);
+      } else if (action === 'ticket') {
+        downloadTicket(idx);
+      } else if (action === 'geojson') {
+        downloadSingleGeoJSON(idx);
+      }
+    });
+  });
+}
+
+// ============================================================ MARKERS
+function rebuildMarkers() {
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+
+  hazards.forEach((h, idx) => {
+    const color = severityColor(h.finding.severity);
+    const m = L.marker([h.latitude, h.longitude], { icon: makeCircleIcon(color) });
+    m.bindPopup(`
+      <strong>${h.finding.barrier_type.replace(/_/g, ' ')}</strong><br>
+      Severity: ${h.finding.severity}<br>
+      ${h.finding.description}
+    `);
+    m.on('click', () => activateHazard(idx));
+    m.addTo(map);
+    markers.push(m);
+  });
+
+  if (hazards.length > 0) {
+    const group = L.featureGroup(markers);
+    map.fitBounds(group.getBounds().pad(0.2));
+  }
+}
+
+function activateHazard(idx) {
+  activeIdx = idx;
+  renderSidebar();
+  const h = hazards[idx];
+  map.setView([h.latitude, h.longitude], 18);
+  if (markers[idx]) markers[idx].openPopup();
+}
+
+// ============================================================ UPLOAD
+document.getElementById('upload-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const fileInput = document.getElementById('photo-input');
+  const btn = document.getElementById('upload-btn');
+  const status = document.getElementById('upload-status');
+
+  if (!fileInput.files.length) return;
+
+  const formData = new FormData();
+  formData.append('photo', fileInput.files[0]);
+
+  btn.disabled = true;
+  status.textContent = 'Sending to local Ollama… (this may take 15–60 s)';
+  status.className = '';
+
+  try {
+    const res = await fetch('/api/audit', { method: 'POST', body: formData });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || res.statusText);
+    }
+    const assessment = await res.json();
+    hazards.push(assessment);
+    rebuildMarkers();
+    renderSidebar();
+    activateHazard(hazards.length - 1);
+    status.textContent = `✓ Audited: ${assessment.finding.barrier_type} (${assessment.finding.severity})`;
+    status.className = 'ok';
+    fileInput.value = '';
+  } catch (err) {
+    status.textContent = `Error: ${err.message}`;
+    status.className = 'error';
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ============================================================ EXPORT GEOJSON (all)
+document.getElementById('btn-export-geojson').addEventListener('click', async () => {
+  const res = await fetch('/api/export/geojson');
+  const blob = await res.blob();
+  downloadBlob(blob, 'pathwatch_hazards.geojson', 'application/geo+json');
+});
+
+// ============================================================ EXPORT ALL TICKETS
+document.getElementById('btn-export-all-tickets').addEventListener('click', async () => {
+  if (hazards.length === 0) { alert('No hazards to export.'); return; }
+  // Download tickets one-by-one and merge into a single .md
+  const parts = [];
+  for (let i = 0; i < hazards.length; i++) {
+    const res = await fetch(`/api/export/ticket/${i}`);
+    parts.push(await res.text());
+  }
+  const blob = new Blob([parts.join('\n\n---\n\n')], { type: 'text/markdown' });
+  downloadBlob(blob, 'pathwatch_311_tickets.md', 'text/markdown');
+});
+
+// ============================================================ PER-CARD HELPERS
+async function downloadTicket(idx) {
+  const res = await fetch(`/api/export/ticket/${idx}`);
+  const blob = await res.blob();
+  const filename = `311_ticket_${idx + 1}_${hazards[idx].finding.barrier_type}.md`;
+  downloadBlob(blob, filename, 'text/markdown');
+}
+
+async function downloadSingleGeoJSON(idx) {
+  const h = hazards[idx];
+  const feature = {
+    type: 'FeatureCollection',
+    features: [{
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [h.longitude, h.latitude] },
+      properties: { barrier_type: h.finding.barrier_type, severity: h.finding.severity }
+    }]
+  };
+  const blob = new Blob([JSON.stringify(feature, null, 2)], { type: 'application/geo+json' });
+  downloadBlob(blob, `hazard_${idx + 1}.geojson`, 'application/geo+json');
+}
+
+// ============================================================ UTIL
+function downloadBlob(blob, filename, type) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ============================================================ INITIAL LOAD
+(async () => {
+  try {
+    const res = await fetch('/api/hazards');
+    const data = await res.json();
+    if (data.length > 0) {
+      hazards = data;
+      rebuildMarkers();
+      renderSidebar();
+    }
+  } catch (_) {
+    // Server might not be up yet; ignore.
+  }
+})();
+</script>
+</body>
+</html>
