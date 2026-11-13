@@ -6,18 +6,16 @@ PathWatch AI — Phase 3 export functions.
 Provides two export targets:
 
 ``export_311_ticket_markdown``
-    Generates a ready-to-submit municipal 311 / campus facilities repair
+    Generates a ready-to-submit municipal 311 or campus facilities repair
     packet in Markdown, citing matched PROWAG/ADA sections, GPS coordinates,
     severity, and jurisdiction submission instructions.
 
 ``export_geojson``
     Outputs a valid RFC 7946 GeoJSON FeatureCollection with OpenStreetMap
-    accessibility tags (wheelchair, kerb, surface, ada_section).
+    accessibility tags (wheelchair, curb, surface, ada_section).
 """
 
 from __future__ import annotations
-
-from datetime import timezone
 
 from core.schemas import HazardAssessment
 
@@ -37,11 +35,11 @@ _SEVERITY_LABEL: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 _OSM_TAGS: dict[str, dict[str, str]] = {
-    "MISSING_CURB_RAMP": {"kerb": "raised", "wheelchair": "no"},
+    "MISSING_CURB_RAMP": {"curb": "raised", "wheelchair": "no"},
     "MISSING_TACTILE_PAVING": {"tactile_paving": "no", "wheelchair": "limited"},
     "HEAVED_OR_CRACKED_PAVEMENT": {"surface": "poor", "wheelchair": "limited", "smoothness": "bad"},
     "PATH_OBSTRUCTION": {"wheelchair": "no", "access": "restricted"},
-    "COMPLIANT": {"wheelchair": "yes", "kerb": "lowered"},
+    "COMPLIANT": {"wheelchair": "yes", "curb": "lowered"},
 }
 
 
@@ -64,8 +62,6 @@ def export_311_ticket_markdown(assessment: HazardAssessment) -> str:
     """
     f = assessment.finding
     j = assessment.jurisdiction
-    ts = assessment.timestamp.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
     severity_label = _SEVERITY_LABEL.get(f.severity, f.severity)
 
     # --- ADA/PROWAG citations block ------------------------------------------
@@ -92,7 +88,6 @@ def export_311_ticket_markdown(assessment: HazardAssessment) -> str:
 
     return f"""# PathWatch AI — Accessibility Barrier Repair Request
 
-**Generated:** {ts}
 **Source Image:** `{assessment.image_path}`
 **GPS Coordinates:** {assessment.latitude:.6f}, {assessment.longitude:.6f} *(source: {assessment.gps_source})*
 
@@ -104,9 +99,7 @@ def export_311_ticket_markdown(assessment: HazardAssessment) -> str:
 |---|---|
 | **Barrier Type** | {f.barrier_type.replace('_', ' ').title()} |
 | **Severity** | {severity_label} |
-| **Model Confidence** | {f.confidence:.0%} |
 | **Description** | {f.description} |
-| **Recommended Action** | {f.recommended_action} |
 
 ---
 
@@ -134,7 +127,7 @@ accessibility auditor. All inference ran locally on device — no cloud services
 def export_geojson(assessments: list[HazardAssessment]) -> dict:
     """Build a valid RFC 7946 GeoJSON FeatureCollection from a list of assessments.
 
-    Each Feature carries OpenStreetMap accessibility tags (wheelchair, kerb,
+    Each Feature carries OpenStreetMap accessibility tags (wheelchair, curb,
     surface, smoothness, ada_section) derived from the barrier type and the
     matched ADA/PROWAG rule codes.
 

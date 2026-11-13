@@ -13,7 +13,7 @@ echo "  PathWatch AI — Setup"
 echo "======================================================"
 
 # ----------------------------------------------------------------------
-# 1. Create virtual environment if it does not already exist
+# 1. Create a virtual environment if one does not already exist.
 # ----------------------------------------------------------------------
 if [ ! -d ".venv" ]; then
     echo "[1/4] Creating Python virtual environment (.venv) …"
@@ -22,13 +22,13 @@ else
     echo "[1/4] Virtual environment .venv already exists — skipping."
 fi
 
-# Activate
+# Activate the environment.
 # shellcheck source=/dev/null
 source .venv/bin/activate
 
 # ----------------------------------------------------------------------
-# 2. Install / upgrade dependencies (including python-multipart for
-#    FastAPI file uploads required by web/app.py)
+# 2. Install or upgrade dependencies (including python-multipart for
+#    FastAPI file uploads required by web/app.py).
 # ----------------------------------------------------------------------
 echo "[2/4] Installing requirements …"
 pip install --quiet --upgrade pip
@@ -38,13 +38,13 @@ pip install --quiet python-multipart
 echo "      ✓ All packages installed."
 
 # ----------------------------------------------------------------------
-# 3. Seed pathwatch.db with ADA/PROWAG standards and jurisdiction contacts
+# 3. Seed pathwatch.db with ADA/PROWAG standards and jurisdiction contacts.
 # ----------------------------------------------------------------------
 echo "[3/4] Seeding pathwatch.db …"
 python mcp_server/ada_seed.py
 
 # ----------------------------------------------------------------------
-# 4. Check that Ollama is installed and the moondream model is available
+# 4. Check that Ollama is installed and the moondream model is available.
 # ----------------------------------------------------------------------
 echo "[4/4] Checking Ollama …"
 
@@ -56,7 +56,7 @@ if ! command -v ollama &> /dev/null; then
 else
     echo "      ✓ ollama found: $(ollama --version 2>/dev/null || echo 'version unknown')"
 
-    # Check whether moondream is already pulled
+    # Check whether moondream has already been pulled.
     PATHWATCH_MODEL="${PATHWATCH_MODEL:-moondream}"
     if ollama list 2>/dev/null | grep -q "^${PATHWATCH_MODEL}"; then
         echo "      ✓ Model '${PATHWATCH_MODEL}' is available."

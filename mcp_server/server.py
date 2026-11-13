@@ -3,14 +3,14 @@ mcp_server/server.py
 ====================
 PathWatch AI — FastMCP server (stdio transport).
 
-Exposes two MCP tools that ground every detected hazard with verified ADA/
-PROWAG rule codes and local 311 / facilities-repair routing, satisfying
+Exposes two MCP tools that ground each detected hazard with verified ADA/
+PROWAG rule codes and local 311/facilities-repair routing, satisfying
 AGENTS.md architectural guardrail 3.
 
 Usage (stdio, for Bob MCP integration):
     python mcp_server/server.py
 
-The server reads from pathwatch.db in the repo root.  Run ada_seed.py first
+The server reads from pathwatch.db in the repo root. Run ada_seed.py first
 if the database does not yet exist.
 """
 

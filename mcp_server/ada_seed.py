@@ -2,11 +2,11 @@
 mcp_server/ada_seed.py
 ======================
 Seeds pathwatch.db (SQLite, repo root) with:
-  - ada_standards   : ADA / PROWAG curb-ramp and sidewalk rules
-  - jurisdiction_contacts : Milwaukee 311 and UWM Facilities routing
+  - ada_standards: ADA/PROWAG curb-ramp and sidewalk rules
+  - jurisdiction_contacts: Milwaukee 311 and UWM Facilities routing
 
-Run directly:  python mcp_server/ada_seed.py
-Idempotent    : uses INSERT OR IGNORE; safe to re-run at any time.
+Run directly: python mcp_server/ada_seed.py
+Idempotent: uses INSERT OR IGNORE; safe to re-run at any time.
 """
 
 import sqlite3

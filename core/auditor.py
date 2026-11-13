@@ -15,19 +15,20 @@ PathWatch AI — Local VLM inference + MCP enrichment pipeline.
 
 Environment variables
 ---------------------
-PATHWATCH_MODEL   Ollama model tag to use (default: ``moondream``).
+PATHWATCH_MODEL   Ollama model tag to use (default: ``qwen2.5vl:3b``).
 """
 
 import base64
 import io
 import logging
 import os
+import re
 from pathlib import Path
 
 import httpx
 from pydantic import ValidationError
 
-from core.ingest import extract_gps
+from core.ingest import extract_gps_from_image
 from core.schemas import HazardAssessment, VisionFinding
 from mcp_server.server import find_jurisdiction_contact, lookup_ada_standard
 
@@ -38,7 +39,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _OLLAMA_BASE_URL: str = "http://localhost:11434"
-_DEFAULT_MODEL: str = "moondream"
+_DEFAULT_MODEL: str = "qwen2.5vl:3b"
 
 # Inference options: low temperature for deterministic classifications.
 _OLLAMA_OPTIONS: dict = {"temperature": 0.1, "repeat_penalty": 1.3}
@@ -52,7 +53,7 @@ _OLLAMA_OPTIONS: dict = {"temperature": 0.1, "repeat_penalty": 1.3}
 _BARRIER_DB_QUERY: dict[str, str] = {
     "MISSING_CURB_RAMP": "curb ramp",
     "MISSING_TACTILE_PAVING": "detectable warning",
-    "HEAVED_OR_CRACKED_PAVEMENT": "surface",
+    "HEAVED_OR_CRACKED_PAVEMENT": "sidewalk",
     "PATH_OBSTRUCTION": "protruding object",
 }
 
@@ -65,8 +66,34 @@ _SYSTEM_PROMPT = (
 _USER_PROMPT = (
     "Examine this sidewalk image carefully. "
     "Identify the primary accessibility barrier (or confirm compliance). "
+    "If the sidewalk has visible cracks, uplifted concrete slabs, vertical lip "
+    "displacement, missing curb ramps, missing yellow tactile domes, or "
+    "obstructions, you MUST classify it as the matching hazard "
+    "(`HEAVED_OR_CRACKED_PAVEMENT`, `MISSING_CURB_RAMP`, "
+    "`MISSING_TACTILE_PAVING`, or `PATH_OBSTRUCTION`) and NEVER `COMPLIANT`. "
+    "Use `severity: NONE` ONLY when `barrier_type` is `COMPLIANT`. For any hazard "
+    "(`HEAVED_OR_CRACKED_PAVEMENT`, `MISSING_CURB_RAMP`, `MISSING_TACTILE_PAVING`, "
+    "`PATH_OBSTRUCTION`), `severity` MUST be `HIGH`, `MEDIUM`, or `LOW`. "
+    "For description, write 1–2 concise, factual sentences describing the "
+    "physical sidewalk, curb ramp, tactile paving, or obstruction visible "
+    "in the photo. Never repeat sentences or mention JSON filenames. "
+    "For recommended_action, write 1 concrete physical remediation step, "
+    "such as installing a truncated dome tactile warning surface at a ramp "
+    "threshold or grinding an uplifted concrete joint to eliminate a trip hazard. "
     "Return ONLY valid JSON matching the schema — no markdown, no explanation."
 )
+
+_DEFAULT_ACTIONS: dict[str, str] = {
+    "MISSING_CURB_RAMP": "Install a compliant curb ramp at the crossing.",
+    "MISSING_TACTILE_PAVING": (
+        "Install truncated dome tactile warning surface at the ramp threshold."
+    ),
+    "HEAVED_OR_CRACKED_PAVEMENT": (
+        "Grind or replace the uplifted concrete to create a flush, stable walking surface."
+    ),
+    "PATH_OBSTRUCTION": "Remove the obstruction and keep the accessible route clear.",
+    "COMPLIANT": "Maintain the sidewalk and curb ramp in their current accessible condition.",
+}
 
 # Maximum pixel dimension for the image sent to the model.
 _MAX_IMAGE_PX: int = 1024
@@ -75,6 +102,58 @@ _MAX_IMAGE_PX: int = 1024
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _sanitize_finding(finding: VisionFinding) -> VisionFinding:
+    """Normalize contradictory findings and clean descriptions/actions."""
+    barrier_type = finding.barrier_type
+    severity = finding.severity
+    if barrier_type == "COMPLIANT" and severity in {"HIGH", "MEDIUM", "LOW"}:
+        barrier_type = "HEAVED_OR_CRACKED_PAVEMENT"
+    if barrier_type == "COMPLIANT":
+        severity = "NONE"
+    elif severity == "NONE":
+        high_severity_terms = ("uplifted", "heaved", "missing", "blocked")
+        if (
+            barrier_type in {"MISSING_CURB_RAMP", "PATH_OBSTRUCTION"}
+            or any(term in finding.description.casefold() for term in high_severity_terms)
+        ):
+            severity = "HIGH"
+        else:
+            severity = "MEDIUM"
+
+    sentences = re.split(r"(?<=[.!?])\s+", finding.description.strip())
+    unique_sentences: list[str] = []
+    previous_sentence: str | None = None
+    for sentence in sentences:
+        normalized = " ".join(sentence.split()).casefold()
+        if normalized and normalized != previous_sentence:
+            unique_sentences.append(sentence)
+        previous_sentence = normalized
+    description = " ".join(unique_sentences)
+
+    action = (finding.recommended_action or "").strip()
+    normalized_action = " ".join(action.split()).casefold()
+    normalized_description = " ".join(description.split()).casefold()
+    if (
+        not normalized_action
+        or ".json" in normalized_action
+        or ".jpg" in normalized_action
+        or (
+            normalized_description
+            and normalized_description in normalized_action
+        )
+    ):
+        action = _DEFAULT_ACTIONS[barrier_type]
+
+    return finding.model_copy(
+        update={
+            "barrier_type": barrier_type,
+            "severity": severity,
+            "description": description,
+            "recommended_action": action,
+        }
+    )
+
 
 def _resize_and_encode(image_path: Path) -> str:
     """Return a base64-encoded JPEG string, resized to fit within _MAX_IMAGE_PX.
@@ -151,12 +230,17 @@ def _call_ollama(image_b64: str, model: str) -> VisionFinding:
 # Public: audit_image
 # ---------------------------------------------------------------------------
 
-def audit_image(image_path: Path, model: str | None = None) -> HazardAssessment:
+def audit_image(
+    image_path: Path,
+    model: str | None = None,
+    override_lat: float | None = None,
+    override_lon: float | None = None,
+) -> HazardAssessment:
     """Full single-image audit pipeline.
 
     Steps
     -----
-    1. Extract GPS from EXIF (or use fallback coordinates).
+    1. Use supplied coordinates, or extract GPS from EXIF (or use fallback coordinates).
     2. Resize & base64-encode the image.
     3. Send to local Ollama; validate response as ``VisionFinding``.
     4. Enrich with ADA standards and jurisdiction routing via MCP server functions.
@@ -165,7 +249,9 @@ def audit_image(image_path: Path, model: str | None = None) -> HazardAssessment:
     Args:
         image_path: Path to the image file to audit.
         model:      Ollama model tag override.  Defaults to the value of the
-                    ``PATHWATCH_MODEL`` env-var, or ``moondream``.
+                    ``PATHWATCH_MODEL`` env-var, or ``qwen2.5vl:3b``.
+        override_lat: Optional latitude used when image GPS metadata is absent.
+        override_lon: Optional longitude used when image GPS metadata is absent.
 
     Returns:
         A fully populated ``HazardAssessment`` instance.
@@ -178,7 +264,11 @@ def audit_image(image_path: Path, model: str | None = None) -> HazardAssessment:
     image_path = Path(image_path)
 
     # Step 1 — GPS
-    latitude, longitude, gps_source = extract_gps(image_path)
+    latitude, longitude, gps_source = extract_gps_from_image(
+        image_path,
+        override_lat=override_lat,
+        override_lon=override_lon,
+    )
     logger.info(
         "GPS for %s: (%.6f, %.6f) source=%s",
         image_path.name,
@@ -192,7 +282,7 @@ def audit_image(image_path: Path, model: str | None = None) -> HazardAssessment:
 
     # Step 3 — VLM inference
     logger.info("Sending %s to Ollama model '%s' …", image_path.name, resolved_model)
-    finding = _call_ollama(image_b64, resolved_model)
+    finding = _sanitize_finding(_call_ollama(image_b64, resolved_model))
     logger.info(
         "VLM result: barrier=%s severity=%s confidence=%.2f",
         finding.barrier_type,

@@ -1,12 +1,13 @@
 """
 core/ingest.py
 ==============
-PathWatch AI — Image / video ingestion utilities.
+PathWatch AI — Image and video ingestion utilities.
 
 Two public functions:
 
-* ``extract_gps``        — reads EXIF GPS tags from a photo and converts
-                           DMS to decimal degrees (falls back gracefully).
+* ``extract_gps_from_image`` — reads EXIF GPS tags from a photo and converts
+                               DMS values to decimal degrees, then uses
+                               supplied coordinates or the campus fallback.
 * ``extract_sharp_frames`` — samples non-blurry keyframes from a walk-along
                              video using OpenCV's Laplacian variance metric.
 """
@@ -38,69 +39,78 @@ def _dms_to_decimal(dms_values: list, ref: str) -> float:
         if hasattr(v, "numerator"):  # IFDRational
             return float(v)
         if isinstance(v, tuple):
-            return v[0] / v[1] if v[1] else 0.0
+            if not v[1]:
+                raise ValueError("Invalid EXIF rational with a zero denominator")
+            return v[0] / v[1]
         return float(v)
+
+    if len(dms_values) != 3:
+        raise ValueError("GPS coordinates must contain degrees, minutes, and seconds")
 
     degrees = _to_float(dms_values[0])
     minutes = _to_float(dms_values[1])
     seconds = _to_float(dms_values[2])
     decimal = degrees + minutes / 60.0 + seconds / 3600.0
+    if isinstance(ref, bytes):
+        ref = ref.decode("ascii")
+    ref = ref.strip().upper()
     if ref in ("S", "W"):
         decimal = -decimal
+    elif ref not in ("N", "E"):
+        raise ValueError(f"Invalid GPS coordinate reference: {ref!r}")
     return decimal
 
 
 # ---------------------------------------------------------------------------
-# Public: extract_gps
+# Public: extract_gps_from_image
 # ---------------------------------------------------------------------------
 
-def extract_gps(image_path: Path) -> tuple[float, float, str]:
+def extract_gps_from_image(
+    image_path: Path,
+    override_lat: float | None = None,
+    override_lon: float | None = None,
+) -> tuple[float, float, str]:
     """Extract GPS coordinates from image EXIF metadata.
 
-    Uses Pillow to read the GPSInfo IFD (tag 34853).  Converts DMS triplets
-    to signed decimal degrees.
+    Uses Pillow to read the GPSInfo IFD (tag 34853), converting DMS triplets
+    to signed decimal degrees. EXIF coordinates take precedence over supplied
+    coordinates.
 
     Args:
         image_path: Path to a JPEG, PNG, TIFF, or other Pillow-supported image.
+        override_lat: Optional user-supplied latitude used when EXIF GPS is absent.
+        override_lon: Optional user-supplied longitude used when EXIF GPS is absent.
 
     Returns:
         A ``(latitude, longitude, gps_source)`` tuple where ``gps_source`` is
-        ``"exif"`` on success or ``"fallback"`` when GPS data is absent/invalid.
+        ``"exif"`` on success, ``"manual"`` when supplied coordinates are used,
+        or ``"fallback"`` when neither EXIF nor override coordinates are available.
         The fallback coordinates are ``(43.0766, -87.8812)`` (UWM campus).
     """
     try:
         from PIL import Image
-        from PIL.ExifTags import TAGS, GPSTAGS
+        from PIL.ExifTags import GPSTAGS
 
         with Image.open(image_path) as img:
-            exif_data = img._getexif()  # returns None for images without EXIF
+            gps_ifd = img.getexif().get_ifd(0x8825)
 
-        if not exif_data:
-            raise ValueError("No EXIF data found")
-
-        # Locate the GPSInfo IFD by its numeric tag (34853)
-        gps_ifd = None
-        for tag_id, value in exif_data.items():
-            if TAGS.get(tag_id) == "GPSInfo":
-                gps_ifd = value
-                break
-
-        if not gps_ifd:
-            raise ValueError("GPSInfo tag absent")
-
-        # Map numeric GPS sub-tags to readable names
-        gps: dict = {}
-        for key, val in gps_ifd.items():
-            tag_name = GPSTAGS.get(key, key)
-            gps[tag_name] = val
-
+        gps = {GPSTAGS.get(key, key): value for key, value in gps_ifd.items()}
         lat = _dms_to_decimal(gps["GPSLatitude"], gps["GPSLatitudeRef"])
         lon = _dms_to_decimal(gps["GPSLongitude"], gps["GPSLongitudeRef"])
         return lat, lon, "exif"
 
     except Exception as exc:  # noqa: BLE001
-        logger.debug("GPS extraction failed for %s: %s — using fallback", image_path, exc)
-        return _FALLBACK_LAT, _FALLBACK_LON, "fallback"
+        logger.debug("GPS extraction failed for %s: %s", image_path, exc)
+
+    if override_lat is not None and override_lon is not None:
+        return float(override_lat), float(override_lon), "manual"
+
+    logger.debug("No EXIF GPS or complete override supplied for %s — using fallback", image_path)
+    return _FALLBACK_LAT, _FALLBACK_LON, "fallback"
+
+
+# Backwards-compatible name for existing callers.
+extract_gps = extract_gps_from_image
 
 
 # ---------------------------------------------------------------------------

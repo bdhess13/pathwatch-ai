@@ -19,7 +19,11 @@ from pathlib import Path
 
 import pytest
 
-from core.ingest import _dms_to_decimal, extract_gps, extract_sharp_frames
+from core.ingest import (
+    _dms_to_decimal,
+    extract_gps_from_image,
+    extract_sharp_frames,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +49,10 @@ class TestDmsToDecimal:
         result = _dms_to_decimal([(90, 1), (0, 1), (0, 1)], "E")
         assert result > 0
 
+    def test_reference_is_case_insensitive(self):
+        result = _dms_to_decimal([(10, 1), (0, 1), (0, 1)], "s")
+        assert result == -10
+
     def test_float_inputs(self):
         result = _dms_to_decimal([43.0, 4.0, 35.76], "N")
         assert result == pytest.approx(43.0766, rel=1e-4)
@@ -68,7 +76,7 @@ def _make_gps_jpeg(tmp_path: Path, lat: float, lon: float, name: str = "gps.jpg"
     """Create a JPEG with a synthetic GPSInfo EXIF IFD embedded via piexif.
 
     Falls back to writing a plain JPEG (no EXIF) if piexif is not installed,
-    which means ``extract_gps`` should then return the fallback coordinates —
+    which means ``extract_gps_from_image`` should then return the fallback coordinates —
     the test is skipped in that scenario to avoid a false failure.
     """
     try:
@@ -108,40 +116,152 @@ def _make_gps_jpeg(tmp_path: Path, lat: float, lon: float, name: str = "gps.jpg"
 
 
 # ---------------------------------------------------------------------------
-# extract_gps — fallback path (no EXIF)
+# extract_gps_from_image — fallback path (no EXIF)
 # ---------------------------------------------------------------------------
 
 class TestExtractGpsFallback:
     def test_no_exif_returns_fallback(self, tmp_path):
         img = _make_plain_jpeg(tmp_path)
-        lat, lon, source = extract_gps(img)
+        lat, lon, source = extract_gps_from_image(img)
         assert source == "fallback"
         assert lat == pytest.approx(43.0766)
         assert lon == pytest.approx(-87.8812)
 
     def test_nonexistent_file_returns_fallback(self, tmp_path):
-        lat, lon, source = extract_gps(tmp_path / "ghost.jpg")
+        lat, lon, source = extract_gps_from_image(tmp_path / "ghost.jpg")
         assert source == "fallback"
         assert lat == pytest.approx(43.0766)
         assert lon == pytest.approx(-87.8812)
 
     def test_fallback_source_string_is_literal(self, tmp_path):
         img = _make_plain_jpeg(tmp_path)
-        _, _, source = extract_gps(img)
+        _, _, source = extract_gps_from_image(img)
         assert source == "fallback"
+
+    def test_user_coordinates_are_used_when_exif_is_absent(self, tmp_path):
+        img = _make_plain_jpeg(tmp_path)
+        lat, lon, source = extract_gps_from_image(
+            img,
+            override_lat=40.7128,
+            override_lon=-74.0060,
+        )
+        assert (lat, lon, source) == (40.7128, -74.0060, "manual")
 
 
 # ---------------------------------------------------------------------------
-# extract_gps — happy path (EXIF GPS present)
+# extract_gps_from_image — happy path (EXIF GPS present)
 # ---------------------------------------------------------------------------
 
 class TestExtractGpsExif:
+    def test_reads_gps_from_get_ifd(self, tmp_path, monkeypatch):
+        from PIL import Image
+
+        class FakeExif(dict):
+            def get_ifd(self, tag_id):
+                assert tag_id == 0x8825
+                return {
+                    1: "n",
+                    2: [(43, 1), (4, 1), (3576, 100)],
+                    3: "w",
+                    4: [(87, 1), (52, 1), (5232, 100)],
+                }
+
+        class FakeImage:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                pass
+
+            def getexif(self):
+                return FakeExif()
+
+        monkeypatch.setattr(Image, "open", lambda _: FakeImage())
+
+        lat, lon, source = extract_gps_from_image(tmp_path / "synthetic.jpg")
+
+        assert source == "exif"
+        assert lat == pytest.approx(43.0766, abs=0.001)
+        assert lon == pytest.approx(-87.8812, abs=0.001)
+
+    def test_exif_coordinates_take_precedence_over_user_coordinates(
+        self, tmp_path, monkeypatch
+    ):
+        from PIL import Image
+
+        class FakeExif(dict):
+            def get_ifd(self, tag_id):
+                assert tag_id == 0x8825
+                return {
+                    1: "N",
+                    2: [(43, 1), (4, 1), (3576, 100)],
+                    3: "W",
+                    4: [(87, 1), (52, 1), (5232, 100)],
+                }
+
+        class FakeImage:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                pass
+
+            def getexif(self):
+                return FakeExif()
+
+        monkeypatch.setattr(Image, "open", lambda _: FakeImage())
+
+        result = extract_gps_from_image(
+            tmp_path / "synthetic.jpg",
+            override_lat=40.7128,
+            override_lon=-74.006,
+        )
+
+        lat, lon, source = result
+        assert source == "exif"
+        assert lat == pytest.approx(43.0766, abs=0.001)
+        assert lon == pytest.approx(-87.8812, abs=0.001)
+
+    def test_gps_is_read_from_get_ifd(self, tmp_path, monkeypatch):
+        from PIL import Image
+
+        class FakeExif(dict):
+            def get_ifd(self, tag_id):
+                assert tag_id == 0x8825
+                return {
+                    1: "N",
+                    2: [(43, 1), (4, 1), (3576, 100)],
+                    3: "W",
+                    4: [(87, 1), (52, 1), (5232, 100)],
+                }
+
+        class FakeImage:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                pass
+
+            def getexif(self):
+                return FakeExif()
+
+            def _getexif(self):
+                raise AssertionError("legacy EXIF path should not be used")
+
+        monkeypatch.setattr(Image, "open", lambda _: FakeImage())
+
+        lat, lon, source = extract_gps_from_image(tmp_path / "synthetic.jpg")
+
+        assert source == "exif"
+        assert lat == pytest.approx(43.0766, abs=0.001)
+        assert lon == pytest.approx(-87.8812, abs=0.001)
+
     def test_exif_gps_round_trip(self, tmp_path):
         piexif = pytest.importorskip("piexif", reason="piexif not installed")
         img = _make_gps_jpeg(tmp_path, lat=43.0766, lon=-87.8812)
         if img is None:
             pytest.skip("piexif unavailable")
-        lat, lon, source = extract_gps(img)
+        lat, lon, source = extract_gps_from_image(img)
         assert source == "exif"
         # Allow ~0.001° tolerance for the integer DMS round-trip
         assert lat == pytest.approx(43.0766, abs=0.001)
@@ -152,7 +272,7 @@ class TestExtractGpsExif:
         img = _make_gps_jpeg(tmp_path, lat=40.7128, lon=-74.0060)
         if img is None:
             pytest.skip("piexif unavailable")
-        _, _, source = extract_gps(img)
+        _, _, source = extract_gps_from_image(img)
         assert source == "exif"
 
 

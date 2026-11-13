@@ -59,8 +59,8 @@ class VisionFinding(BaseModel):
         ...,
         description="One-sentence plain-English description of the detected condition.",
     )
-    recommended_action: str = Field(
-        ...,
+    recommended_action: str | None = Field(
+        default=None,
         description="Concise repair or remediation action for a facilities team.",
     )
 
@@ -81,10 +81,11 @@ class HazardAssessment(BaseModel):
     image_path: str = Field(..., description="Absolute or relative path to the source image.")
     latitude: float = Field(..., description="Decimal-degree latitude of the hazard.")
     longitude: float = Field(..., description="Decimal-degree longitude of the hazard.")
-    gps_source: Literal["exif", "fallback"] = Field(
+    gps_source: Literal["exif", "manual", "browser", "fallback"] = Field(
         ...,
         description=(
             "'exif' when GPS was read from image metadata; "
+            "'manual' or 'browser' when user coordinates were supplied; "
             "'fallback' when the default campus coordinates were used."
         ),
     )

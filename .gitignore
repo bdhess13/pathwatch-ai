@@ -1,7 +1,11 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
+*.pyc
 *.py[codz]
 *$py.class
+
+# macOS
+.DS_Store
 
 # C extensions
 *.so
@@ -51,6 +55,10 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+
+# Uploaded demo files
+sample_data/uploads/*
+!sample_data/uploads/.gitkeep
 
 # Translations
 *.mo
@@ -152,7 +160,7 @@ activemq-data/
 # Environments
 .env
 .envrc
-.venv
+.venv/
 env/
 venv/
 ENV/

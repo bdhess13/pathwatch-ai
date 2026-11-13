@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/png" href="/static/favicon.png">
   <title>PathWatch AI — Accessibility Audit Dashboard</title>
 
   <!-- Leaflet.js (local-network CDN; runs fully offline after first load) -->
@@ -16,6 +17,16 @@
   <style>
     /* ------------------------------------------------------------------ reset */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    .gps-source-badge {
+      display: inline-block;
+      margin-bottom: 8px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #eff6ff;
+      color: #1d4f91;
+      font-size: 10px;
+      font-weight: 600;
+    }
     body {
       font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
       font-size: 14px;
@@ -77,6 +88,11 @@
       cursor: pointer;
       width: 100%;
     }
+    #upload-hint {
+      color: #57606a;
+      font-size: 11px;
+      line-height: 1.4;
+    }
     #upload-btn {
       background: #3b82d4;
       color: #fff;
@@ -90,6 +106,11 @@
     }
     #upload-btn:hover { background: #2563b0; }
     #upload-btn:disabled { background: #9db9e8; cursor: not-allowed; }
+    #pin-status {
+      min-height: 16px;
+      color: #57606a;
+      font-size: 11px;
+    }
     #upload-status {
       font-size: 12px;
       color: #57606a;
@@ -97,6 +118,79 @@
     }
     #upload-status.error { color: #b91c1c; }
     #upload-status.ok { color: #16a34a; }
+    #upload-status { display: flex; align-items: center; gap: 7px; }
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid #d1d5db;
+      border-top-color: #3b82d4;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #upload-error {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px;
+      color: #991b1b;
+      background: #fef2f2;
+      border-bottom: 1px solid #fecaca;
+      font-size: 12px;
+    }
+    #upload-error[hidden] { display: none; }
+    #upload-error-dismiss {
+      border: 0;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+    }
+
+    /* Summary and severity filters */
+    #summary-panel {
+      padding: 12px 16px;
+      border-bottom: 1px solid #e5e7eb;
+      flex-shrink: 0;
+    }
+    #summary-panel h2 {
+      font-size: 12px;
+      font-weight: 600;
+      color: #57606a;
+      margin-bottom: 8px;
+    }
+    #summary-metrics {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+    }
+    .metric {
+      padding: 6px 8px;
+      border-radius: 6px;
+      background: #f7f8fa;
+    }
+    .metric-value { display: block; font-size: 17px; font-weight: 700; line-height: 1.2; }
+    .metric-label { display: block; color: #57606a; font-size: 10px; }
+    #severity-filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 10px;
+    }
+    .filter-btn {
+      padding: 4px 7px;
+      border: 1px solid #d1d5db;
+      border-radius: 5px;
+      background: #fff;
+      color: #57606a;
+      cursor: pointer;
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .filter-btn[aria-pressed="true"] { border-color: #3b82d4; color: #1d4f91; background: #eff6ff; }
 
     /* Export buttons */
     #export-panel {
@@ -129,7 +223,7 @@
       flex-direction: column;
       gap: 8px;
     }
-    #hazard-list-empty {
+    #hazard-list-empty, .hazard-list-empty {
       color: #57606a;
       font-size: 13px;
       text-align: center;
@@ -187,6 +281,28 @@
       color: #57606a;
       margin-bottom: 6px;
     }
+    .card-jurisdiction {
+      font-size: 12px;
+      color: #24292f;
+      margin-bottom: 8px;
+    }
+    .card-thumb {
+      display: block;
+      width: 100%;
+      max-height: 150px;
+      margin: 8px 0;
+      border-radius: 6px;
+      object-fit: cover;
+    }
+    .popup-thumb {
+      display: block;
+      width: 220px;
+      max-width: 100%;
+      max-height: 140px;
+      margin-top: 8px;
+      border-radius: 5px;
+      object-fit: cover;
+    }
     .card-citations {
       font-size: 11px;
       color: #3b82d4;
@@ -206,12 +322,65 @@
       transition: background 0.15s;
     }
     .card-btn:hover { background: #e5e7eb; }
+    .card-btn-delete {
+      color: #b91c1c;
+      border-color: #fecaca;
+      background: #fef2f2;
+    }
+    .card-btn-delete:hover { background: #fee2e2; }
 
     /* ------------------------------------------------------------------ map */
     #map {
       flex: 1;
       z-index: 0;
     }
+    .location-control {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 6px;
+      border: 0;
+      box-shadow: none;
+    }
+    .location-control-button {
+      position: relative;
+      display: grid;
+      width: 42px;
+      height: 42px;
+      place-items: center;
+      border: 0;
+      border-radius: 6px;
+      background: #fff;
+      color: #4b5563;
+      box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35);
+      cursor: pointer;
+    }
+    .location-control-button:hover { background: #f7f8fa; color: #2563b0; }
+    .location-control-button:focus-visible { outline: 2px solid #3b82d4; outline-offset: 2px; }
+    .location-control-button[aria-busy="true"] { cursor: wait; }
+    .location-control-button[aria-busy="true"] svg { visibility: hidden; }
+    .location-control-button[aria-busy="true"]::after {
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      border: 2px solid #d1d5db;
+      border-top-color: #3b82d4;
+      border-radius: 50%;
+      content: "";
+      animation: spin 0.8s linear infinite;
+    }
+    .location-status {
+      display: none;
+      max-width: 250px;
+      padding: 7px 10px;
+      border-radius: 5px;
+      background: #fff;
+      box-shadow: 0 1px 5px rgba(0, 0, 0, 0.25);
+      color: #57606a;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .location-status:not(:empty) { display: block; }
   </style>
 </head>
 <body>
@@ -226,14 +395,37 @@
   <!-- ============================================================ SIDEBAR -->
   <aside id="sidebar">
 
+    <section id="summary-panel" aria-label="Audit summary">
+      <h2>Audit Summary</h2>
+      <div id="summary-metrics">
+        <div class="metric"><span class="metric-value" id="metric-total">0</span><span class="metric-label">Total Audits</span></div>
+        <div class="metric"><span class="metric-value" id="metric-high">0</span><span class="metric-label">High Severity</span></div>
+        <div class="metric"><span class="metric-value" id="metric-medium-low">0</span><span class="metric-label">Medium / Low</span></div>
+        <div class="metric"><span class="metric-value" id="metric-compliant">0</span><span class="metric-label">Compliant</span></div>
+      </div>
+      <div id="severity-filters" role="group" aria-label="Filter audits by severity">
+        <button class="filter-btn" type="button" data-filter="ALL" aria-pressed="true">All</button>
+        <button class="filter-btn" type="button" data-filter="HIGH" aria-pressed="false">HIGH</button>
+        <button class="filter-btn" type="button" data-filter="MEDIUM" aria-pressed="false">MEDIUM</button>
+        <button class="filter-btn" type="button" data-filter="LOW" aria-pressed="false">LOW</button>
+        <button class="filter-btn" type="button" data-filter="COMPLIANT" aria-pressed="false">COMPLIANT</button>
+      </div>
+    </section>
+
     <!-- Upload form -->
     <div id="upload-panel">
       <h2>Audit a Photo</h2>
       <form id="upload-form">
         <input id="photo-input" type="file" accept="image/jpeg,image/png,image/webp" required />
-        <button id="upload-btn" type="submit">Analyse Image</button>
-        <div id="upload-status"></div>
+        <p id="upload-hint">Tip: Photos with GPS metadata auto-pin. Or click anywhere on the map before uploading to set the pin location.</p>
+        <button id="upload-btn" type="submit">Analyze Image</button>
+        <div id="pin-status" role="status" aria-live="polite"></div>
+        <div id="upload-status" role="status" aria-live="polite"></div>
       </form>
+    </div>
+    <div id="upload-error" role="alert" hidden>
+      <span id="upload-error-message"></span>
+      <button id="upload-error-dismiss" type="button" aria-label="Dismiss error">&times;</button>
     </div>
 
     <!-- Export buttons -->
@@ -262,10 +454,119 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 20
 }).addTo(map);
 
+const locationControl = L.control({ position: 'topleft' });
+locationControl.onAdd = () => {
+  const container = L.DomUtil.create('div', 'leaflet-control location-control');
+  const button = L.DomUtil.create('button', 'location-control-button', container);
+  button.type = 'button';
+  button.title = 'Center on my current location';
+  button.setAttribute('aria-label', button.title);
+  button.innerHTML = `
+    <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+      <circle cx="12" cy="12" r="7"></circle>
+      <path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path>
+      <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"></circle>
+    </svg>`;
+  const status = L.DomUtil.create('div', 'location-status', container);
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-live', 'polite');
+  L.DomEvent.disableClickPropagation(container);
+  L.DomEvent.on(button, 'click', () => {
+    const unavailableMessage = 'Location access unavailable or denied — check browser permissions';
+    if (!navigator.geolocation) {
+      status.textContent = unavailableMessage;
+      return;
+    }
+
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    status.textContent = '';
+    const finishLocating = message => {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+      if (message) status.textContent = message;
+    };
+
+    try {
+      navigator.geolocation.getCurrentPosition(position => {
+        updateCurrentLocation(position, true);
+        finishLocating();
+      }, () => finishLocating(unavailableMessage), { enableHighAccuracy: true, timeout: 10000 });
+    } catch {
+      finishLocating(unavailableMessage);
+    }
+  });
+  return container;
+};
+locationControl.addTo(map);
+
 // ============================================================ STATE
 let hazards = [];       // HazardAssessment[]
 let markers = [];       // Leaflet marker per hazard
 let activeIdx = null;
+let activeFilter = 'ALL';
+const markerGroup = L.featureGroup().addTo(map);
+let currentLocationMarker = null;
+let currentLocationAccuracy = null;
+let selectedUploadMarker = null;
+let selectedLat = null;
+let selectedLon = null;
+let userLat = null;
+let userLon = null;
+let hasCustomMapPin = false;
+
+function updateCurrentLocation(position, centerMap) {
+  userLat = position.coords.latitude;
+  userLon = position.coords.longitude;
+  const latLng = [userLat, userLon];
+  if (centerMap) map.flyTo(latLng, 17);
+
+  if (!hasCustomMapPin) {
+    selectedLat = userLat;
+    selectedLon = userLon;
+    setSelectedUploadPin(userLat, userLon, 'Current Location');
+  }
+
+  if (!currentLocationMarker) {
+    currentLocationMarker = L.circleMarker(latLng, {
+      radius: 8,
+      color: '#fff',
+      weight: 3,
+      fillColor: '#4285f4',
+      fillOpacity: 1
+    }).addTo(map).bindTooltip('Your current location');
+  } else {
+    currentLocationMarker.setLatLng(latLng);
+  }
+
+  if (!currentLocationAccuracy) {
+    currentLocationAccuracy = L.circle(latLng, {
+      radius: position.coords.accuracy,
+      color: '#4285f4',
+      weight: 1,
+      opacity: 0.35,
+      fillColor: '#4285f4',
+      fillOpacity: 0.1,
+      interactive: false
+    }).addTo(map);
+  } else {
+    currentLocationAccuracy.setLatLng(latLng);
+    currentLocationAccuracy.setRadius(position.coords.accuracy);
+  }
+}
+
+if (navigator.geolocation && navigator.permissions?.query) {
+  navigator.permissions.query({ name: 'geolocation' }).then(permission => {
+    if (permission.state === 'granted') {
+      navigator.geolocation.getCurrentPosition(
+        position => updateCurrentLocation(position, false),
+        () => {},
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    }
+  }).catch(() => {});
+}
 
 // ============================================================ COLOUR UTILS
 function severityColor(sev) {
@@ -282,24 +583,141 @@ function makeCircleIcon(color) {
   });
 }
 
+function setSelectedUploadPin(latitude, longitude, label = `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`) {
+  document.getElementById('pin-status').textContent =
+    `Pin set: ${label}`;
+  const latLng = [latitude, longitude];
+  if (!selectedUploadMarker) {
+    selectedUploadMarker = L.circleMarker(latLng, {
+      radius: 9,
+      color: '#fff',
+      weight: 2,
+      fillColor: '#2563eb',
+      fillOpacity: 1
+    }).addTo(map).bindTooltip('Selected Upload Pin', { permanent: true, direction: 'top' });
+  } else {
+    selectedUploadMarker.setLatLng(latLng);
+  }
+}
+
+map.on('click', e => {
+  selectedLat = e.latlng.lat;
+  selectedLon = e.latlng.lng;
+  hasCustomMapPin = true;
+  setSelectedUploadPin(selectedLat, selectedLon);
+});
+
+function normalizedSeverity(hazard) {
+  return hazard.finding.severity === 'NONE' ? 'COMPLIANT' : hazard.finding.severity;
+}
+
+function imageUrl(imagePath) {
+  const filename = String(imagePath || '').replace(/\\/g, '/').split('/').pop();
+  return filename ? `/uploads/${encodeURIComponent(filename)}` : '';
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, character => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[character]);
+}
+
+function standardsMarkup(finding, standards) {
+  const matchedStandards = (standards || []).map(standard => {
+    const ruleCode = escapeHtml(standard.rule_code || '');
+    const threshold = standard.threshold
+      ? ` — ${escapeHtml(standard.threshold)}`
+      : '';
+    return `${ruleCode}${threshold}`;
+  }).filter(Boolean);
+
+  if (matchedStandards.length) return `📋 ${matchedStandards.join('<br>')}`;
+  return finding.barrier_type === 'COMPLIANT'
+    ? 'No violations — meets PROWAG standards'
+    : '';
+}
+
+function jurisdictionMarkup(jurisdiction) {
+  const name = jurisdiction?.jurisdiction_name;
+  const contactDetails = [
+    jurisdiction?.phone ? `Phone: ${escapeHtml(jurisdiction.phone)}` : '',
+    jurisdiction?.email ? `Email: ${escapeHtml(jurisdiction.email)}` : '',
+    jurisdiction?.portal_url ? `Portal: ${escapeHtml(jurisdiction.portal_url)}` : '',
+  ].filter(Boolean);
+  if (!name && contactDetails.length === 0) return '';
+
+  return `<div class="card-jurisdiction">
+    <strong>Routes to:</strong> ${escapeHtml(name || 'Facilities contact')}
+    ${contactDetails.length ? `<br>${contactDetails.join(' · ')}` : ''}
+  </div>`;
+}
+
+function updateSummary() {
+  const counts = hazards.reduce((result, hazard) => {
+    const severity = normalizedSeverity(hazard);
+    result[severity] = (result[severity] || 0) + 1;
+    return result;
+  }, {});
+  document.getElementById('metric-total').textContent = hazards.length;
+  document.getElementById('metric-high').textContent = counts.HIGH || 0;
+  document.getElementById('metric-medium-low').textContent = (counts.MEDIUM || 0) + (counts.LOW || 0);
+  document.getElementById('metric-compliant').textContent = counts.COMPLIANT || 0;
+}
+
+function matchesFilter(hazard) {
+  return activeFilter === 'ALL' || normalizedSeverity(hazard) === activeFilter;
+}
+
+function fitMarkerBounds() {
+  if (markerGroup.getLayers().length === 0) return;
+  const bounds = markerGroup.getBounds();
+  if (bounds.isValid()) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+}
+
 // ============================================================ RENDER HAZARD LIST
 function renderSidebar() {
   const list = document.getElementById('hazard-list');
-  const empty = document.getElementById('hazard-list-empty');
+  updateSummary();
+  document.querySelectorAll('.filter-btn').forEach(button => {
+    button.setAttribute('aria-pressed', String(button.dataset.filter === activeFilter));
+  });
   list.innerHTML = '';
 
   if (hazards.length === 0) {
+    const empty = document.createElement('p');
+    empty.id = 'hazard-list-empty';
+    empty.appendChild(document.createTextNode('No hazards audited yet.'));
+    empty.appendChild(document.createElement('br'));
+    empty.appendChild(document.createTextNode('Upload a sidewalk photo above.'));
     list.appendChild(empty);
-    empty.style.display = '';
     return;
   }
 
-  hazards.forEach((h, idx) => {
-    const f = h.finding;
-    const sev = f.severity === 'NONE' ? 'COMPLIANT' : f.severity;
-    const color = severityColor(f.severity);
+  const visibleHazards = hazards.map((hazard, idx) => ({ hazard, idx })).filter(item => matchesFilter(item.hazard));
+  if (visibleHazards.length === 0) {
+    const noMatches = document.createElement('p');
+    noMatches.className = 'hazard-list-empty';
+    noMatches.textContent = 'No audits match this severity filter.';
+    list.appendChild(noMatches);
+    return;
+  }
 
-    const citations = (h.ada_standard || []).map(r => r.rule_code).join(' · ') || '—';
+  visibleHazards.forEach(({ hazard: h, idx }) => {
+    const f = h.finding;
+    const sev = normalizedSeverity(h);
+
+    const citations = standardsMarkup(f, h.ada_standard);
+    const image = imageUrl(h.image_path);
+    const gpsSourceLabel = {
+      exif: 'Photo EXIF GPS',
+      manual: 'Map Pin',
+      browser: 'Map Pin',
+      fallback: 'Default UWM Fallback',
+    }[h.gps_source] || 'Default UWM Fallback';
 
     const card = document.createElement('div');
     card.className = 'hazard-card' + (idx === activeIdx ? ' active' : '');
@@ -307,15 +725,19 @@ function renderSidebar() {
     card.innerHTML = `
       <div class="card-header">
         <div class="severity-dot sev-${sev}"></div>
-        <span class="card-title">${f.barrier_type.replace(/_/g, ' ')}</span>
+        <span class="card-title">${escapeHtml(f.barrier_type.replace(/_/g, ' '))}</span>
         <span class="card-severity badge-${sev}">${f.severity}</span>
       </div>
-      <div class="card-desc">${f.description}</div>
-      <div class="card-citations">📋 ${citations}</div>
+      ${image ? `<img class="card-thumb" src="${image}" alt="Audit photo" loading="lazy" onerror="this.hidden=true">` : ''}
+      <div class="card-desc">${escapeHtml(f.description)}</div>
+      <span class="gps-source-badge">${gpsSourceLabel}</span>
+      ${jurisdictionMarkup(h.jurisdiction)}
+      ${citations ? `<div class="card-citations">${citations}</div>` : ''}
       <div class="card-actions">
         <button class="card-btn" data-action="fly" data-idx="${idx}">📍 Pan to</button>
-        <button class="card-btn" data-action="ticket" data-idx="${idx}">📄 311 Ticket</button>
-        <button class="card-btn" data-action="geojson" data-idx="${idx}">🗂 GeoJSON</button>
+        <button class="card-btn" data-action="ticket" data-hazard-id="${h.id}">📄 311 Ticket</button>
+        <button class="card-btn" data-action="geojson" data-hazard-id="${h.id}">🗂 GeoJSON</button>
+        <button class="card-btn card-btn-delete" data-action="delete" data-hazard-id="${h.id}" aria-label="Delete hazard">Delete</button>
       </div>
     `;
     list.appendChild(card);
@@ -332,46 +754,86 @@ function renderSidebar() {
 
   // Button clicks
   list.querySelectorAll('.card-btn').forEach(btn => {
-    btn.addEventListener('click', e => {
+    btn.addEventListener('click', async e => {
       e.stopPropagation();
       const idx = parseInt(btn.dataset.idx);
       const action = btn.dataset.action;
       if (action === 'fly') {
         activateHazard(idx);
       } else if (action === 'ticket') {
-        downloadTicket(idx);
+        downloadTicket(btn.dataset.hazardId);
       } else if (action === 'geojson') {
-        downloadSingleGeoJSON(idx);
+        downloadSingleGeoJSON(btn.dataset.hazardId);
+      } else if (action === 'delete') {
+        btn.disabled = true;
+        try {
+          await deleteHazard(btn.dataset.hazardId);
+        } catch (error) {
+          window.alert(`Unable to delete hazard: ${error.message || 'Request failed.'}`);
+        } finally {
+          btn.disabled = false;
+        }
       }
     });
   });
 }
 
+async function deleteHazard(hazardId) {
+  const response = await fetch(`/api/hazards/${encodeURIComponent(hazardId)}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.detail || response.statusText || `Request failed (${response.status})`);
+  }
+
+  const idx = hazards.findIndex(hazard => String(hazard.id) === String(hazardId));
+  if (idx === -1) return;
+
+  const marker = markers[idx];
+  if (marker) {
+    if (marker.isPopupOpen()) marker.closePopup();
+    markerGroup.removeLayer(marker);
+  }
+  hazards.splice(idx, 1);
+  if (activeIdx === idx) {
+    activeIdx = null;
+  } else if (activeIdx !== null && activeIdx > idx) {
+    activeIdx -= 1;
+  }
+
+  rebuildMarkers();
+  renderSidebar();
+}
+
 // ============================================================ MARKERS
 function rebuildMarkers() {
-  markers.forEach(m => map.removeLayer(m));
+  markerGroup.clearLayers();
   markers = [];
 
   hazards.forEach((h, idx) => {
+    if (!matchesFilter(h)) return;
     const color = severityColor(h.finding.severity);
     const m = L.marker([h.latitude, h.longitude], { icon: makeCircleIcon(color) });
+    const image = imageUrl(h.image_path);
     m.bindPopup(`
-      <strong>${h.finding.barrier_type.replace(/_/g, ' ')}</strong><br>
+      <strong>${escapeHtml(h.finding.barrier_type.replace(/_/g, ' '))}</strong><br>
       Severity: ${h.finding.severity}<br>
-      ${h.finding.description}
+      ${escapeHtml(h.finding.description)}<br>
+      ${jurisdictionMarkup(h.jurisdiction)}
+      ${standardsMarkup(h.finding, h.ada_standard)}
+      ${image ? `<img class="popup-thumb" src="${image}" alt="Audit photo" onerror="this.hidden=true">` : ''}
     `);
     m.on('click', () => activateHazard(idx));
-    m.addTo(map);
-    markers.push(m);
+    markerGroup.addLayer(m);
+    markers[idx] = m;
   });
 
-  if (hazards.length > 0) {
-    const group = L.featureGroup(markers);
-    map.fitBounds(group.getBounds().pad(0.2));
-  }
+  fitMarkerBounds();
 }
 
 function activateHazard(idx) {
+  if (!hazards[idx] || !matchesFilter(hazards[idx])) return;
   activeIdx = idx;
   renderSidebar();
   const h = hazards[idx];
@@ -379,42 +841,72 @@ function activateHazard(idx) {
   if (markers[idx]) markers[idx].openPopup();
 }
 
+document.getElementById('severity-filters').addEventListener('click', e => {
+  const button = e.target.closest('.filter-btn');
+  if (!button) return;
+  activeFilter = button.dataset.filter;
+  if (activeIdx !== null && !matchesFilter(hazards[activeIdx])) activeIdx = null;
+  rebuildMarkers();
+  renderSidebar();
+});
+
 // ============================================================ UPLOAD
 document.getElementById('upload-form').addEventListener('submit', async e => {
   e.preventDefault();
   const fileInput = document.getElementById('photo-input');
   const btn = document.getElementById('upload-btn');
   const status = document.getElementById('upload-status');
+  const errorBanner = document.getElementById('upload-error');
+  const errorMessage = document.getElementById('upload-error-message');
 
   if (!fileInput.files.length) return;
 
   const formData = new FormData();
   formData.append('photo', fileInput.files[0]);
+  if (selectedLat !== null && selectedLon !== null) {
+    formData.append('latitude', String(selectedLat));
+    formData.append('longitude', String(selectedLon));
+  }
 
   btn.disabled = true;
-  status.textContent = 'Sending to local Ollama… (this may take 15–60 s)';
+  errorBanner.hidden = true;
+  status.innerHTML = '<span class="spinner" aria-hidden="true"></span> Analyzing photo locally via Ollama...';
   status.className = '';
 
   try {
     const res = await fetch('/api/audit', { method: 'POST', body: formData });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || res.statusText);
+      const errorBody = await res.json().catch(() => null);
+      throw new Error(errorBody?.detail || res.statusText || `Request failed (${res.status})`);
     }
     const assessment = await res.json();
     hazards.push(assessment);
     rebuildMarkers();
     renderSidebar();
     activateHazard(hazards.length - 1);
+    fitMarkerBounds();
     status.textContent = `✓ Audited: ${assessment.finding.barrier_type} (${assessment.finding.severity})`;
     status.className = 'ok';
     fileInput.value = '';
+    if (selectedUploadMarker) {
+      map.removeLayer(selectedUploadMarker);
+      selectedUploadMarker = null;
+    }
+    selectedLat = null;
+    selectedLon = null;
+    hasCustomMapPin = false;
+    document.getElementById('pin-status').textContent = '';
   } catch (err) {
-    status.textContent = `Error: ${err.message}`;
-    status.className = 'error';
+    errorMessage.textContent = `Audit failed: ${err.message || 'Unable to reach the local audit service.'}`;
+    errorBanner.hidden = false;
+    status.textContent = '';
   } finally {
     btn.disabled = false;
   }
+});
+
+document.getElementById('upload-error-dismiss').addEventListener('click', () => {
+  document.getElementById('upload-error').hidden = true;
 });
 
 // ============================================================ EXPORT GEOJSON (all)
@@ -427,39 +919,65 @@ document.getElementById('btn-export-geojson').addEventListener('click', async ()
 // ============================================================ EXPORT ALL TICKETS
 document.getElementById('btn-export-all-tickets').addEventListener('click', async () => {
   if (hazards.length === 0) { alert('No hazards to export.'); return; }
-  // Download tickets one-by-one and merge into a single .md
-  const parts = [];
-  for (let i = 0; i < hazards.length; i++) {
-    const res = await fetch(`/api/export/ticket/${i}`);
-    parts.push(await res.text());
+  try {
+    const parts = [];
+    for (const hazard of hazards) {
+      const res = await fetch(`/api/export/ticket/${hazard.id}`);
+      if (res.status !== 200) {
+        throw new Error(await exportResponseError(res));
+      }
+      parts.push(await res.text());
+    }
+    const blob = new Blob([parts.join('\n\n---\n\n')], { type: 'text/markdown' });
+    downloadBlob(blob, 'pathwatch_311_tickets.md', 'text/markdown');
+  } catch (error) {
+    showErrorBanner(`311 Ticket export failed: ${error.message || 'Request failed.'}`);
   }
-  const blob = new Blob([parts.join('\n\n---\n\n')], { type: 'text/markdown' });
-  downloadBlob(blob, 'pathwatch_311_tickets.md', 'text/markdown');
 });
 
 // ============================================================ PER-CARD HELPERS
-async function downloadTicket(idx) {
-  const res = await fetch(`/api/export/ticket/${idx}`);
-  const blob = await res.blob();
-  const filename = `311_ticket_${idx + 1}_${hazards[idx].finding.barrier_type}.md`;
-  downloadBlob(blob, filename, 'text/markdown');
+async function downloadTicket(hazardId) {
+  try {
+    const res = await fetch(`/api/export/ticket/${hazardId}`);
+    if (res.status !== 200) {
+      throw new Error(await exportResponseError(res));
+    }
+    const blob = await res.blob();
+    downloadBlob(blob, `311_ticket_${hazardId}.md`, 'text/markdown');
+  } catch (error) {
+    showErrorBanner(`311 Ticket export failed: ${error.message || 'Request failed.'}`);
+  }
 }
 
-async function downloadSingleGeoJSON(idx) {
-  const h = hazards[idx];
+async function downloadSingleGeoJSON(hazardId) {
+  const h = hazards.find(hazard => String(hazard.id) === String(hazardId));
+  if (!h) {
+    showErrorBanner('GeoJSON export failed: Hazard not found.');
+    return;
+  }
   const feature = {
     type: 'FeatureCollection',
     features: [{
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [h.longitude, h.latitude] },
-      properties: { barrier_type: h.finding.barrier_type, severity: h.finding.severity }
+      properties: { hazard_id: h.id, barrier_type: h.finding.barrier_type, severity: h.finding.severity }
     }]
   };
   const blob = new Blob([JSON.stringify(feature, null, 2)], { type: 'application/geo+json' });
-  downloadBlob(blob, `hazard_${idx + 1}.geojson`, 'application/geo+json');
+  downloadBlob(blob, `hazard_${hazardId}.geojson`, 'application/geo+json');
 }
 
 // ============================================================ UTIL
+async function exportResponseError(response) {
+  const body = await response.json().catch(() => null);
+  return body?.detail || response.statusText || `Request failed (${response.status})`;
+}
+
+function showErrorBanner(message) {
+  document.getElementById('upload-error-message').textContent = message;
+  document.getElementById('upload-error').hidden = false;
+}
+
 function downloadBlob(blob, filename, type) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -475,11 +993,9 @@ function downloadBlob(blob, filename, type) {
   try {
     const res = await fetch('/api/hazards');
     const data = await res.json();
-    if (data.length > 0) {
-      hazards = data;
-      rebuildMarkers();
-      renderSidebar();
-    }
+    hazards = data;
+    rebuildMarkers();
+    renderSidebar();
   } catch (_) {
     // Server might not be up yet; ignore.
   }

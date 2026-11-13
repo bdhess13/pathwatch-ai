@@ -93,6 +93,15 @@ class TestVisionFindingValid:
         assert isinstance(schema, dict)
         assert "properties" in schema
 
+    def test_recommended_action_is_optional_and_preserved(self):
+        data = _valid_finding()
+        del data["recommended_action"]
+
+        assert VisionFinding(**data).recommended_action is None
+        assert VisionFinding(**_valid_finding()).recommended_action == (
+            "Mill and resurface affected panel."
+        )
+
     def test_round_trip_json(self):
         original = VisionFinding(**_valid_finding())
         restored = VisionFinding.model_validate_json(original.model_dump_json())
@@ -127,6 +136,95 @@ class TestVisionFindingInvalid:
             VisionFinding(**data)
 
 
+class TestSanitizeFinding:
+    @pytest.mark.parametrize("severity", ["HIGH", "MEDIUM", "LOW"])
+    def test_compliant_nonzero_severity_becomes_surface_hazard(self, severity):
+        from core.auditor import _sanitize_finding
+
+        finding = VisionFinding(**_valid_finding(
+            barrier_type="COMPLIANT",
+            severity=severity,
+            recommended_action="",
+        ))
+
+        sanitized = _sanitize_finding(finding)
+
+        assert sanitized.barrier_type == "HEAVED_OR_CRACKED_PAVEMENT"
+        assert sanitized.severity == severity
+        assert sanitized.recommended_action == (
+            "Grind or replace the uplifted concrete to create a flush, stable walking surface."
+        )
+
+    def test_compliant_none_severity_stays_compliant(self):
+        from core.auditor import _sanitize_finding
+
+        finding = VisionFinding(**_valid_finding(
+            barrier_type="COMPLIANT",
+            severity="NONE",
+        ))
+
+        sanitized = _sanitize_finding(finding)
+
+        assert sanitized.barrier_type == "COMPLIANT"
+        assert sanitized.severity == "NONE"
+
+    @pytest.mark.parametrize(
+        ("barrier_type", "description", "expected_severity"),
+        [
+            ("MISSING_CURB_RAMP", "No additional details.", "HIGH"),
+            ("HEAVED_OR_CRACKED_PAVEMENT", "An uplifted slab.", "HIGH"),
+            ("HEAVED_OR_CRACKED_PAVEMENT", "A rough surface.", "MEDIUM"),
+        ],
+    )
+    def test_noncompliant_none_severity_is_upgraded(
+        self, barrier_type, description, expected_severity
+    ):
+        from core.auditor import _sanitize_finding
+
+        finding = VisionFinding(**_valid_finding(
+            barrier_type=barrier_type,
+            severity="NONE",
+            description=description,
+        ))
+
+        sanitized = _sanitize_finding(finding)
+
+        assert sanitized.severity == expected_severity
+
+    def test_deduplicates_consecutive_description_sentences(self):
+        from core.auditor import _sanitize_finding
+
+        finding = VisionFinding(**_valid_finding(
+            description="A raised joint spans the path. A raised joint spans the path. "
+            "The adjacent panel is cracked.",
+        ))
+
+        sanitized = _sanitize_finding(finding)
+
+        assert sanitized.description == (
+            "A raised joint spans the path. The adjacent panel is cracked."
+        )
+
+    @pytest.mark.parametrize(
+        "action",
+        [None, "", "repair-details.json", "A crack blocks the route."],
+    )
+    def test_replaces_empty_filename_or_description_action(self, action):
+        from core.auditor import _sanitize_finding
+
+        finding = VisionFinding(**_valid_finding(
+            barrier_type="PATH_OBSTRUCTION",
+            description="A crack blocks the route.",
+            recommended_action=action,
+        ))
+
+        sanitized = _sanitize_finding(finding)
+
+        assert sanitized.recommended_action == (
+            "Remove the obstruction and keep the accessible route clear."
+        )
+
+
 # ===========================================================================
 # 3. HazardAssessment — valid inputs
 # ===========================================================================
@@ -144,6 +242,11 @@ class TestHazardAssessmentValid:
     def test_gps_source_exif(self):
         ha = _make_assessment(gps_source="exif")
         assert ha.gps_source == "exif"
+
+    @pytest.mark.parametrize("gps_source", ["manual", "browser"])
+    def test_gps_source_user_coordinates(self, gps_source):
+        ha = _make_assessment(gps_source=gps_source)
+        assert ha.gps_source == gps_source
 
     def test_with_enrichment(self):
         ha = _make_assessment(
@@ -176,7 +279,7 @@ class TestHazardAssessmentValid:
 class TestHazardAssessmentInvalid:
     def test_bad_gps_source(self):
         with pytest.raises(ValidationError):
-            HazardAssessment(**_valid_assessment(gps_source="manual"))
+            HazardAssessment(**_valid_assessment(gps_source="unknown"))
 
     def test_missing_image_path(self):
         data = _valid_assessment()
@@ -224,6 +327,47 @@ class TestAuditImageMocked:
             result = audit_image(img)
         assert isinstance(result, HazardAssessment)
 
+    def test_default_model_and_prompt_require_hazard_classification(
+        self, tmp_path, monkeypatch
+    ):
+        from core.auditor import audit_image
+        img = _fake_image(tmp_path)
+        mock_resp = _mock_ollama_response("MISSING_CURB_RAMP", "HIGH")
+        monkeypatch.delenv("PATHWATCH_MODEL", raising=False)
+        with patch("httpx.post", return_value=mock_resp) as post:
+            audit_image(img)
+
+        payload = post.call_args.kwargs["json"]
+        assert payload["model"] == "qwen2.5vl:3b"
+        user_prompt = next(
+            message["content"]
+            for message in payload["messages"]
+            if message["role"] == "user"
+        )
+        assert (
+            "If the sidewalk has visible cracks, uplifted concrete slabs, vertical lip "
+            "displacement, missing curb ramps, missing yellow tactile domes, or "
+            "obstructions, you MUST classify it as the matching hazard "
+            "(`HEAVED_OR_CRACKED_PAVEMENT`, `MISSING_CURB_RAMP`, "
+            "`MISSING_TACTILE_PAVING`, or `PATH_OBSTRUCTION`) and NEVER `COMPLIANT`."
+        ) in user_prompt
+        assert (
+            "Use `severity: NONE` ONLY when `barrier_type` is `COMPLIANT`. For any "
+            "hazard (`HEAVED_OR_CRACKED_PAVEMENT`, `MISSING_CURB_RAMP`, "
+            "`MISSING_TACTILE_PAVING`, `PATH_OBSTRUCTION`), `severity` MUST be "
+            "`HIGH`, `MEDIUM`, or `LOW`."
+        ) in user_prompt
+
+    def test_pathwatch_model_environment_override(self, tmp_path, monkeypatch):
+        from core.auditor import audit_image
+        img = _fake_image(tmp_path)
+        mock_resp = _mock_ollama_response("MISSING_CURB_RAMP", "HIGH")
+        monkeypatch.setenv("PATHWATCH_MODEL", "custom-local-model")
+        with patch("httpx.post", return_value=mock_resp) as post:
+            audit_image(img)
+
+        assert post.call_args.kwargs["json"]["model"] == "custom-local-model"
+
     def test_gps_fallback_on_no_exif(self, tmp_path):
         from core.auditor import audit_image
         img = _fake_image(tmp_path)
@@ -234,6 +378,24 @@ class TestAuditImageMocked:
         assert result.gps_source == "fallback"
         assert result.latitude == pytest.approx(43.0766)
         assert result.longitude == pytest.approx(-87.8812)
+
+    def test_manual_coordinates_reach_assessment_when_exif_is_absent(self, tmp_path):
+        from core.auditor import audit_image
+
+        img = _fake_image(tmp_path)
+        mock_resp = _mock_ollama_response("PATH_OBSTRUCTION", "MEDIUM")
+        with patch("httpx.post", return_value=mock_resp):
+            result = audit_image(
+                img,
+                override_lat=40.7128,
+                override_lon=-74.006,
+            )
+
+        assert (result.latitude, result.longitude, result.gps_source) == (
+            40.7128,
+            -74.006,
+            "manual",
+        )
 
     def test_vision_finding_pydantic_validated(self, tmp_path):
         from core.auditor import audit_image
@@ -290,6 +452,20 @@ class TestAuditImageMocked:
         with patch("httpx.post", return_value=mock_resp):
             result = audit_image(img)
         assert result.ada_standard == []
+
+    def test_compliant_nonzero_severity_gets_surface_standards(self, tmp_path):
+        from core.auditor import audit_image
+        img = _fake_image(tmp_path)
+        mock_resp = _mock_ollama_response("COMPLIANT", "HIGH")
+        with patch("httpx.post", return_value=mock_resp):
+            result = audit_image(img)
+
+        assert result.finding.barrier_type == "HEAVED_OR_CRACKED_PAVEMENT"
+        assert result.finding.severity == "HIGH"
+        assert any(
+            standard["rule_code"].startswith("PROWAG-R302")
+            for standard in result.ada_standard
+        )
 
     def test_image_path_preserved(self, tmp_path):
         from core.auditor import audit_image
@@ -426,10 +602,11 @@ class TestExport311TicketMarkdown:
         md = export_311_ticket_markdown(ha)
         assert "COMPLIANT" in md.upper() or "No specific ADA" in md
 
-    def test_confidence_formatted_as_percent(self):
+    def test_remediation_action_is_not_included(self):
         from core.exporter import export_311_ticket_markdown
         md = export_311_ticket_markdown(self._enriched_assessment())
-        assert "92%" in md
+        assert "Recommended Action" not in md
+        assert "Mill and resurface affected panel." not in md
 
 
 # ===========================================================================

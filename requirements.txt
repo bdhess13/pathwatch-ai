@@ -10,6 +10,7 @@ pydantic>=2.0
 # --- Web server (Phase 3) ---
 fastapi>=0.111
 uvicorn[standard]>=0.29
+python-multipart>=0.0.9
 
 # --- Local Ollama client (Phase 2) ---
 ollama>=0.2
